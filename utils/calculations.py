@@ -65,7 +65,7 @@ class BusinessCalculations:
     def calculate_risk_flag(return_pct: float, high_return_threshold: float = 0.35) -> str:
         """
         Replicates VBA risk flag logic:
-        =IF(AND(ISNUMBER(RC[-2]), RC[-2] >= " & hiRet & "),""High Returns"","""")
+        =IF(AND(ISNUMBER(RC[-2]), RC[-2] >= \" & hiRet & \"),\"High Returns\",\"\")
         """
         if pd.isna(return_pct):
             return ""

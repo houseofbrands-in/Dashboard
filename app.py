@@ -5,68 +5,253 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import io
-import base64
-import sys
-import os
 
-# Add our custom modules
-sys.path.append(os.path.dirname(__file__))
+# ============================================================================
+# CORE FUNCTIONS (Simplified VBA equivalents)
+# ============================================================================
 
-# Import VBA-converted modules
-try:
-    from core_setup import ProjectMCore
-    from data_importers import DataImporters
-    from kpi_calculator import KPICalculator
-    from master_table import MasterTableBuilder
-    # We'll create these next:
-    # from watchlist_builder import WatchlistBuilder
-    # from returns_analytics import ReturnsAnalytics
-    # from forecast_engine import ForecastEngine
-    # from ads_recommender import AdsRecommender
-except ImportError as e:
-    st.error(f"Module import error: {e}")
-    # Create dummy classes for initial run
-    class ProjectMCore:
-        def __init__(self): pass
-    class DataImporters:
-        @staticmethod
-        def import_sales_csv(df): return {'data': df, 'mapping': {}}
-    class KPICalculator:
-        @staticmethod
-    class MasterTableBuilder:
-        @staticmethod
-        def build_master_table(*args): return pd.DataFrame()
+def normalize_style_id(style_value):
+    """Normalize style ID like VBA: lowercase, trim, handle numbers"""
+    if pd.isna(style_value):
+        return ""
+    
+    # Convert to string
+    style_str = str(style_value)
+    
+    # Remove extra spaces
+    style_str = style_str.strip()
+    
+    # If it's a number with .0, remove decimal
+    try:
+        if '.' in style_str and style_str.split('.')[1] == '0':
+            style_str = style_str.split('.')[0]
+    except:
+        pass
+    
+    return style_str.lower()
 
-# Initialize session state
-if 'project_core' not in st.session_state:
-    st.session_state.project_core = ProjectMCore()
+def import_sales_csv(df):
+    """VBA ImportSalesCSV equivalent"""
+    result = df.copy()
+    
+    # Auto-detect columns
+    date_col = None
+    style_col = None
+    qty_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        
+        if not date_col and any(x in col_lower for x in ['date', 'created', 'order']):
+            date_col = col
+        
+        if not style_col and any(x in col_lower for x in ['style', 'product', 'code', 'id']):
+            style_col = col
+        
+        if not qty_col and any(x in col_lower for x in ['qty', 'quantity', 'units']):
+            qty_col = col
+    
+    # Required columns
+    if not date_col or not style_col:
+        raise ValueError("Need Date and Style columns")
+    
+    # Process dates
+    result['OrderDate'] = pd.to_datetime(result[date_col], errors='coerce')
+    
+    # Style key (CRITICAL - fixes your issue)
+    result['StyleKey'] = result[style_col].apply(normalize_style_id)
+    
+    # Quantity
+    if qty_col:
+        result['NetUnits'] = pd.to_numeric(result[qty_col], errors='coerce').fillna(1)
+    else:
+        result['NetUnits'] = 1
+    
+    # Row counter (like VBA RowUnit)
+    result['RowUnit'] = 1
+    
+    return result, {'date_col': date_col, 'style_col': style_col, 'qty_col': qty_col}
 
-if 'sales_data' not in st.session_state:
-    st.session_state.sales_data = None
-    st.session_state.sales_mapping = None
+def import_returns_csv(df):
+    """VBA ImportReturnsCSV equivalent"""
+    result = df.copy()
+    
+    # Auto-detect
+    date_col = None
+    style_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        
+        if not date_col and any(x in col_lower for x in ['date', 'return', 'created']):
+            date_col = col
+        
+        if not style_col and any(x in col_lower for x in ['style', 'product', 'code', 'id']):
+            style_col = col
+    
+    if not date_col or not style_col:
+        raise ValueError("Need Date and Style columns")
+    
+    result['ReturnDate'] = pd.to_datetime(result[date_col], errors='coerce')
+    result['StyleKey'] = result[style_col].apply(normalize_style_id)
+    
+    # Quantity
+    qty_cols = [col for col in df.columns if 'qty' in str(col).lower() or 'quantity' in str(col).lower()]
+    if qty_cols:
+        result['UnitsReturned'] = pd.to_numeric(result[qty_cols[0]], errors='coerce').fillna(1)
+    else:
+        result['UnitsReturned'] = 1
+    
+    return result, {'date_col': date_col, 'style_col': style_col}
 
-if 'returns_data' not in st.session_state:
-    st.session_state.returns_data = None
-    st.session_state.returns_mapping = None
+def kpi_total_orders_30d(sales_df):
+    """VBA KPI_TotalOrders_30d equivalent"""
+    if sales_df is None or len(sales_df) == 0:
+        return 0
+    
+    today = datetime.now()
+    cutoff = today - timedelta(days=30)
+    
+    mask = (sales_df['OrderDate'] >= cutoff) & (sales_df['OrderDate'] <= today)
+    
+    if 'RowUnit' in sales_df.columns:
+        return int(sales_df.loc[mask, 'RowUnit'].sum())
+    elif 'NetUnits' in sales_df.columns:
+        return int(sales_df.loc[mask, 'NetUnits'].sum())
+    else:
+        return int(mask.sum())
 
-if 'catalog_data' not in st.session_state:
-    st.session_state.catalog_data = None
+def kpi_return_pct_30d(sales_df, returns_df):
+    """VBA KPI_ReturnPct_30d equivalent"""
+    orders = kpi_total_orders_30d(sales_df)
+    
+    if returns_df is None or len(returns_df) == 0 or orders == 0:
+        return 0
+    
+    today = datetime.now()
+    cutoff = today - timedelta(days=30)
+    
+    mask = (returns_df['ReturnDate'] >= cutoff) & (returns_df['ReturnDate'] <= today)
+    
+    if 'UnitsReturned' in returns_df.columns:
+        returns = returns_df.loc[mask, 'UnitsReturned'].sum()
+    else:
+        returns = 0
+    
+    return returns / orders
 
-if 'master_table' not in st.session_state:
-    st.session_state.master_table = None
+def build_master_table(sales_df, returns_df, catalog_df, params):
+    """VBA BuildMasterTable equivalent"""
+    master_rows = []
+    
+    # Get unique styles
+    if catalog_df is not None and len(catalog_df) > 0:
+        # Find style column
+        style_cols = [col for col in catalog_df.columns 
+                     if any(x in str(col).lower() for x in ['style', 'product', 'code', 'id'])]
+        
+        if style_cols:
+            style_col = style_cols[0]
+            unique_styles = catalog_df[style_col].dropna().unique()
+            
+            for style in unique_styles:
+                style_key = normalize_style_id(style)
+                master_rows.append({
+                    'Style ID': style,
+                    'StyleKey': style_key
+                })
+    
+    # If no catalog, use sales data
+    if len(master_rows) == 0 and sales_df is not None:
+        unique_styles = sales_df['StyleKey'].dropna().unique()
+        for style_key in unique_styles:
+            master_rows.append({
+                'Style ID': style_key,
+                'StyleKey': style_key
+            })
+    
+    if len(master_rows) == 0:
+        return pd.DataFrame()
+    
+    master_df = pd.DataFrame(master_rows)
+    
+    # Calculate metrics
+    metrics = []
+    today_date = datetime.now()
+    zero_age = params.get('zero_age', 14)
+    high_ret_pct = params.get('high_return_pct', 0.35)
+    
+    for _, row in master_df.iterrows():
+        style_key = row['StyleKey']
+        
+        # Sales metrics
+        if sales_df is not None and len(sales_df) > 0:
+            style_sales = sales_df[sales_df['StyleKey'] == style_key]
+            orders = style_sales['NetUnits'].sum() if 'NetUnits' in style_sales.columns else 0
+            
+            if len(style_sales) > 0:
+                first_order = style_sales['OrderDate'].min()
+                last_order = style_sales['OrderDate'].max()
+            else:
+                first_order = last_order = None
+        else:
+            orders = 0
+            first_order = last_order = None
+        
+        # Returns metrics
+        if returns_df is not None and len(returns_df) > 0:
+            style_returns = returns_df[returns_df['StyleKey'] == style_key]
+            units_returned = style_returns['UnitsReturned'].sum() if 'UnitsReturned' in style_returns.columns else 0
+        else:
+            units_returned = 0
+        
+        # Calculate percentages
+        return_pct = units_returned / orders if orders > 0 else 0
+        
+        # Determine status
+        if first_order is None:
+            status = "Catalog-Only"
+        elif orders == 0:
+            days_live = (today_date - first_order).days if first_order else 0
+            if days_live >= zero_age:
+                status = "Zero-Sale"
+            else:
+                status = "New"
+        elif (today_date - first_order).days <= 60:
+            status = "New"
+        elif orders > 0:
+            status = "Active"
+        else:
+            status = "Unknown"
+        
+        # Risk flag
+        risk_flag = "High Returns" if return_pct >= high_ret_pct else ""
+        
+        metrics.append({
+            'Style ID': row['Style ID'],
+            'Orders': int(orders),
+            'UnitsReturned': int(units_returned),
+            'ReturnPct': return_pct,
+            'FirstOrderDate': first_order,
+            'LastOrderDate': last_order,
+            'Status': status,
+            'RiskFlag': risk_flag
+        })
+    
+    return pd.DataFrame(metrics)
 
-if 'params' not in st.session_state:
-    st.session_state.params = st.session_state.project_core.seed_params_if_empty()
+# ============================================================================
+# STREAMLIT APP
+# ============================================================================
 
-# Page configuration
+# Page config
 st.set_page_config(
-    page_title="Myntra Partner Dashboard (VBA Migrated)",
+    page_title="Myntra Dashboard (VBA Migration)",
     page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS matching your Excel theme
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -74,13 +259,6 @@ st.markdown("""
         color: #2E86C1;
         font-weight: bold;
         margin-bottom: 1rem;
-        background: linear-gradient(90deg, #2E86C1, #4A90E2);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .excel-theme {
-        background-color: #1E1E1E;
-        color: #FFFFFF;
     }
     .kpi-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -88,36 +266,10 @@ st.markdown("""
         border-radius: 10px;
         color: white;
         text-align: center;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        transition: transform 0.3s;
-    }
-    .kpi-card:hover {
-        transform: translateY(-5px);
     }
     .kpi-value {
-        font-size: 2.5rem;
+        font-size: 2rem;
         font-weight: bold;
-        margin: 10px 0;
-    }
-    .kpi-label {
-        font-size: 1rem;
-        opacity: 0.9;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    .section-header {
-        font-size: 1.5rem;
-        color: #2C3E50;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 2px solid #3498DB;
-    }
-    .data-table {
-        background-color: #FFFFFF;
-        border-radius: 10px;
-        padding: 15px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
     .stButton>button {
         background: linear-gradient(90deg, #4CAF50, #2E7D32);
@@ -125,152 +277,126 @@ st.markdown("""
         border: none;
         padding: 10px 20px;
         border-radius: 5px;
-        font-weight: bold;
-    }
-    .stButton>button:hover {
-        background: linear-gradient(90deg, #45A049, #1B5E20);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar Navigation
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/5968/5968672.png", width=100)
-st.sidebar.title("📊 Project M Dashboard")
+# Initialize session state
+if 'sales_data' not in st.session_state:
+    st.session_state.sales_data = None
+if 'returns_data' not in st.session_state:
+    st.session_state.returns_data = None
+if 'catalog_data' not in st.session_state:
+    st.session_state.catalog_data = None
+if 'master_table' not in st.session_state:
+    st.session_state.master_table = None
+if 'params' not in st.session_state:
+    st.session_state.params = {
+        'zero_age': 14,
+        'high_return_pct': 0.35,
+        'watch_min_orders': 3
+    }
 
+# Sidebar
+st.sidebar.title("📊 Myntra Dashboard")
 menu = st.sidebar.radio(
     "Navigation",
-    ["🏠 Dashboard", "📁 Data Import", "📊 Master Table", "🚨 Watchlist", 
-     "📈 Reports", "🔮 Forecasting", "🎯 Ad Recommendations", "⚙️ Settings"]
+    ["Dashboard", "Data Upload", "Master Table", "Settings"]
 )
 
 # ====================
-# DASHBOARD PAGE (Main)
+# DASHBOARD PAGE
 # ====================
-if menu == "🏠 Dashboard":
+if menu == "Dashboard":
     st.markdown('<div class="main-header">📈 Myntra Partner Dashboard</div>', unsafe_allow_html=True)
     
-    # Last refresh indicator
-    refresh_col1, refresh_col2 = st.columns([3, 1])
-    with refresh_col1:
-        if st.button("🔄 Refresh Dashboard Data", key="refresh_dash"):
-            st.rerun()
-    with refresh_col2:
-        st.caption(f"Last update: {datetime.now().strftime('%d-%b-%Y %I:%M %p')}")
-    
-    # KPI Row - Using VBA Functions
-    st.markdown("### 📊 Key Performance Indicators (30 Days)")
+    # KPI Row
+    st.markdown("### 📊 Key Performance Indicators")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_orders = KPICalculator.kpi_total_orders_30d(
-            st.session_state.sales_data, 
-            st.session_state.params.get('today', datetime.now())
-        )
+        orders = kpi_total_orders_30d(st.session_state.sales_data)
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-value">{total_orders:,.0f}</div>
-            <div class="kpi-label">Orders</div>
+            <div class="kpi-value">{orders:,}</div>
+            <div>Orders (30d)</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
-        return_pct = KPICalculator.kpi_return_pct_30d(
-            st.session_state.sales_data,
-            st.session_state.returns_data,
-            st.session_state.params.get('today', datetime.now())
-        )
+        return_pct = kpi_return_pct_30d(st.session_state.sales_data, st.session_state.returns_data)
         st.markdown(f"""
         <div class="kpi-card">
             <div class="kpi-value">{return_pct:.1%}</div>
-            <div class="kpi-label">Return %</div>
+            <div>Return % (30d)</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
-        total_gmv = KPICalculator.kpi_total_gmv_30d(
-            st.session_state.sales_data,
-            st.session_state.params.get('today', datetime.now())
-        )
-        gmv_text = f"₹{total_gmv/100000:.1f}L" if total_gmv >= 100000 else f"₹{total_gmv:,.0f}"
-        st.markdown(f"""
+        st.markdown("""
         <div class="kpi-card">
-            <div class="kpi-value">{gmv_text}</div>
-            <div class="kpi-label">GMV</div>
+            <div class="kpi-value">—</div>
+            <div>GMV (30d)</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col4:
-        # Placeholder for ad spend (from your VBA)
         st.markdown("""
         <div class="kpi-card">
             <div class="kpi-value">—</div>
-            <div class="kpi-label">Ad Spend</div>
+            <div>Ad Spend (30d)</div>
         </div>
         """, unsafe_allow_html=True)
     
-    # Charts Row
-    st.markdown("---")
-    col1, col2 = st.columns(2)
+    # Quick Stats
+    if st.session_state.master_table is not None:
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            total_styles = len(st.session_state.master_table)
+            st.metric("Total Styles", total_styles)
+        
+        with col2:
+            active_styles = len(st.session_state.master_table[
+                st.session_state.master_table['Status'] == 'Active'
+            ])
+            st.metric("Active Styles", active_styles)
+        
+        with col3:
+            zero_sale = len(st.session_state.master_table[
+                st.session_state.master_table['Status'] == 'Zero-Sale'
+            ])
+            st.metric("Zero-Sale Styles", zero_sale)
     
-    with col1:
-        st.markdown("### 📅 Sales Trend (Last 7 Days)")
-        if st.session_state.sales_data is not None:
-            chart_data = KPICalculator.build_dashboard_chart_ranges(
-                st.session_state.sales_data,
-                st.session_state.returns_data
-            )
-            fig = px.line(chart_data['sales_by_day'], x='Day', y='Orders',
-                         title="Daily Orders", markers=True)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Upload sales data to see charts")
-    
-    with col2:
-        st.markdown("### 🎯 Returns Analysis")
-        if st.session_state.returns_data is not None:
-            chart_data = KPICalculator.build_dashboard_chart_ranges(
-                st.session_state.sales_data,
-                st.session_state.returns_data
-            )
-            fig = px.bar(chart_data['returns_by_reason'], x='Reason', y='Qty',
-                        title="Returns by Reason", color='Reason')
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Upload returns data to see analysis")
-    
-    # Quick Actions (like your Excel buttons)
-    st.markdown("---")
-    st.markdown("### ⚡ Quick Actions")
-    
-    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
-    
-    with action_col1:
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            st.info("Refresh Data clicked - Add your logic")
-    
-    with action_col2:
-        if st.button("📈 Build Charts", use_container_width=True):
-            st.info("Build Charts clicked - Add your logic")
-    
-    with action_col3:
-        if st.button("🚨 Run Alerts", use_container_width=True):
-            st.info("Run Alerts clicked - Will build Watchlist")
-    
-    with action_col4:
-        if st.button("🔮 Forecast", use_container_width=True):
-            st.info("Forecast clicked - Will run inventory forecast")
+    # Charts
+    if st.session_state.sales_data is not None:
+        st.markdown("---")
+        st.markdown("### 📅 Sales Trend")
+        
+        # Sample chart
+        sales_by_day = st.session_state.sales_data.copy()
+        sales_by_day['Date'] = sales_by_day['OrderDate'].dt.date
+        
+        daily_sales = sales_by_day.groupby('Date')['NetUnits'].sum().reset_index()
+        daily_sales = daily_sales.sort_values('Date').tail(30)
+        
+        fig = px.line(daily_sales, x='Date', y='NetUnits', title="Daily Orders (Last 30 Days)")
+        st.plotly_chart(fig, use_container_width=True)
 
 # ====================
-# DATA IMPORT PAGE
+# DATA UPLOAD PAGE
 # ====================
-elif menu == "📁 Data Import":
-    st.markdown('<div class="main-header">📁 Data Import Center</div>', unsafe_allow_html=True)
+elif menu == "Data Upload":
+    st.markdown('<div class="main-header">📁 Data Upload Center</div>', unsafe_allow_html=True)
     
-    # Setup button (like your VBA SetupProjectM)
-    if st.button("⚙️ Run SetupProjectM", type="secondary"):
-        with st.spinner("Setting up Project M..."):
-            result = st.session_state.project_core.setup_project_m()
-            st.success(result)
+    # Setup button (like VBA SetupProjectM)
+    if st.button("⚙️ Run SetupProjectM", help="Initialize the system like Excel VBA"):
+        st.session_state.sales_data = None
+        st.session_state.returns_data = None
+        st.session_state.catalog_data = None
+        st.session_state.master_table = None
+        st.success("✅ System initialized! Ready for data import.")
     
     st.markdown("---")
     
@@ -278,106 +404,86 @@ elif menu == "📁 Data Import":
     
     with col1:
         st.subheader("📈 Sales Data")
-        sales_file = st.file_uploader("Upload Sales CSV", type=['csv'], key="sales_upload")
+        sales_file = st.file_uploader("Upload Sales CSV", type=['csv'], key="sales")
         
         if sales_file is not None:
             try:
                 sales_df = pd.read_csv(sales_file)
                 
-                # Show preview
-                with st.expander("📋 Preview (First 5 rows)"):
+                with st.expander("📋 Preview"):
                     st.dataframe(sales_df.head())
-                    st.write(f"**Shape:** {sales_df.shape[0]} rows × {sales_df.shape[1]} columns")
+                    st.write(f"**Shape:** {sales_df.shape[0]} rows, {sales_df.shape[1]} columns")
                 
-                # Auto-detect button
-                if st.button("🔍 Auto-detect Columns", key="auto_sales"):
-                    with st.spinner("Detecting columns (like VBA)..."):
+                if st.button("🔍 Auto-import Sales", key="auto_sales"):
+                    with st.spinner("Importing sales data (VBA equivalent)..."):
                         try:
-                            import_result = DataImporters.import_sales_csv(sales_df)
-                            st.session_state.sales_data = import_result['data']
-                            st.session_state.sales_mapping = import_result['mapping']
+                            sales_processed, mapping = import_sales_csv(sales_df)
+                            st.session_state.sales_data = sales_processed
                             
-                            # Show mapping
-                            st.success("✅ Columns auto-detected successfully!")
-                            st.json(import_result['mapping'])
+                            st.success("✅ Sales data imported successfully!")
+                            st.write("**Detected columns:**")
+                            st.json(mapping)
                             
-                            # Show sample of normalized data
-                            with st.expander("👀 View Normalized Data"):
-                                st.dataframe(st.session_state.sales_data[['StyleKey', 'OrderDate', 'NetUnits', 'NetGMV']].head())
+                            # Show style IDs
+                            if 'StyleKey' in sales_processed.columns:
+                                with st.expander("👀 View Style IDs"):
+                                    st.write("First 10 Style IDs (normalized):")
+                                    st.write(sales_processed[['StyleKey']].head(10).values.tolist())
+                            
                         except Exception as e:
-                            st.error(f"Auto-detect failed: {str(e)}")
-                
-                # Manual mapping option
-                with st.expander("🛠️ Manual Column Mapping"):
-                    if not sales_df.empty:
-                        date_col = st.selectbox("Date Column", sales_df.columns, key="manual_date")
-                        style_col = st.selectbox("Style Column", sales_df.columns, key="manual_style")
-                        
-                        if st.button("Apply Manual Mapping"):
-                            # Simple processing for manual mapping
-                            sales_df['OrderDate'] = pd.to_datetime(sales_df[date_col], errors='coerce')
-                            sales_df['StyleKey'] = sales_df[style_col].astype(str).str.lower().str.strip()
-                            sales_df['NetUnits'] = 1  # Default
-                            
-                            st.session_state.sales_data = sales_df
-                            st.success("✅ Manual mapping applied!")
-                
+                            st.error(f"Import failed: {str(e)}")
+            
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
     
     with col2:
         st.subheader("🔄 Returns Data")
-        returns_file = st.file_uploader("Upload Returns CSV", type=['csv'], key="returns_upload")
+        returns_file = st.file_uploader("Upload Returns CSV", type=['csv'], key="returns")
         
         if returns_file is not None:
             try:
                 returns_df = pd.read_csv(returns_file)
                 
-                with st.expander("📋 Preview (First 5 rows)"):
+                with st.expander("📋 Preview"):
                     st.dataframe(returns_df.head())
-                    st.write(f"**Shape:** {returns_df.shape[0]} rows × {returns_df.shape[1]} columns")
                 
-                if st.button("🔍 Auto-detect Columns", key="auto_returns"):
-                    with st.spinner("Detecting columns..."):
+                if st.button("🔍 Auto-import Returns", key="auto_returns"):
+                    with st.spinner("Importing returns data..."):
                         try:
-                            import_result = DataImporters.import_returns_csv(returns_df)
-                            st.session_state.returns_data = import_result['data']
-                            st.session_state.returns_mapping = import_result['mapping']
-                            
-                            st.success("✅ Returns columns auto-detected!")
-                            st.json(import_result['mapping'])
+                            returns_processed, mapping = import_returns_csv(returns_df)
+                            st.session_state.returns_data = returns_processed
+                            st.success("✅ Returns data imported!")
                         except Exception as e:
-                            st.error(f"Auto-detect failed: {str(e)}")
+                            st.error(f"Import failed: {str(e)}")
             
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
     
     with col3:
         st.subheader("📚 Catalog Data")
-        catalog_file = st.file_uploader("Upload Catalog CSV", type=['csv'], key="catalog_upload")
+        catalog_file = st.file_uploader("Upload Catalog CSV", type=['csv'], key="catalog")
         
         if catalog_file is not None:
             try:
                 catalog_df = pd.read_csv(catalog_file)
                 st.session_state.catalog_data = catalog_df
+                st.success(f"✅ Catalog loaded: {len(catalog_df)} rows")
                 
                 with st.expander("📋 Preview"):
                     st.dataframe(catalog_df.head())
-                    st.write(f"**Shape:** {catalog_df.shape[0]} rows × {catalog_df.shape[1]} columns")
-                    st.success(f"✅ Catalog loaded: {len(catalog_df)} rows")
             
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
     
-    # Process All Data Button (like your RefreshData VBA)
+    # Process All Data Button (VBA RefreshData equivalent)
     st.markdown("---")
     if st.button("🚀 PROCESS ALL DATA (RefreshData)", type="primary", use_container_width=True):
-        with st.spinner("Processing all data (VBA RefreshData equivalent)..."):
-            # Step 1: Build Master Table
+        with st.spinner("Processing all data..."):
+            # Build Master Table
             if (st.session_state.sales_data is not None or 
                 st.session_state.catalog_data is not None):
                 
-                master_table = MasterTableBuilder.build_master_table(
+                master_table = build_master_table(
                     st.session_state.sales_data,
                     st.session_state.returns_data,
                     st.session_state.catalog_data,
@@ -387,16 +493,9 @@ elif menu == "📁 Data Import":
                 st.session_state.master_table = master_table
                 
                 if not master_table.empty:
-                    st.success(f"✅ Master Table built with {len(master_table)} styles")
-                    
-                    # Show preview
-                    with st.expander("👁️ Preview Master Table"):
-                        st.dataframe(master_table.head(10))
+                    st.success(f"✅ Master Table built: {len(master_table)} styles")
                 else:
                     st.warning("⚠️ Master Table is empty")
-            
-            # Step 2: Update other tables (will add later)
-            # BuildAdsReco, BuildWatchlist30d, etc.
             
             st.success("🎉 All data processed successfully!")
             st.balloons()
@@ -404,15 +503,15 @@ elif menu == "📁 Data Import":
 # ====================
 # MASTER TABLE PAGE
 # ====================
-elif menu == "📊 Master Table":
+elif menu == "Master Table":
     st.markdown('<div class="main-header">📊 Master Styles Table</div>', unsafe_allow_html=True)
     
     if st.session_state.master_table is None or st.session_state.master_table.empty:
-        st.warning("No master table data. Please import data first.")
+        st.warning("No data available. Please import data first.")
         
         if st.button("🔄 Build Master Table Now"):
             with st.spinner("Building Master Table..."):
-                master_table = MasterTableBuilder.build_master_table(
+                master_table = build_master_table(
                     st.session_state.sales_data,
                     st.session_state.returns_data,
                     st.session_state.catalog_data,
@@ -421,45 +520,30 @@ elif menu == "📊 Master Table":
                 st.session_state.master_table = master_table
                 st.rerun()
     else:
-        # Show master table with filters
         st.success(f"✅ Master Table loaded: {len(st.session_state.master_table)} styles")
         
         # Filters
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            status_filter = st.multiselect(
-                "Filter by Status",
-                options=st.session_state.master_table['Status'].unique() 
-                if 'Status' in st.session_state.master_table.columns else [],
-                default=[]
-            )
+            if 'Status' in st.session_state.master_table.columns:
+                status_options = st.session_state.master_table['Status'].unique()
+                status_filter = st.multiselect("Filter by Status", status_options)
         
         with col2:
-            risk_filter = st.multiselect(
-                "Filter by Risk",
-                options=['High Returns', ''] if 'RiskFlag' in st.session_state.master_table.columns else [],
-                default=[]
-            )
-        
-        with col3:
-            # Search box
             search_term = st.text_input("🔍 Search Style ID")
         
         # Apply filters
         filtered_df = st.session_state.master_table.copy()
         
-        if status_filter:
+        if 'status_filter' in locals() and status_filter:
             filtered_df = filtered_df[filtered_df['Status'].isin(status_filter)]
         
-        if risk_filter:
-            filtered_df = filtered_df[filtered_df['RiskFlag'].isin(risk_filter)]
-        
-        if search_term:
+        if 'search_term' in locals() and search_term:
             filtered_df = filtered_df[
                 filtered_df['Style ID'].astype(str).str.contains(search_term, case=False, na=False)
             ]
         
-        # Display table
+        # Display
         st.dataframe(
             filtered_df,
             use_container_width=True,
@@ -469,264 +553,72 @@ elif menu == "📊 Master Table":
                     format="%.1f%%",
                     min_value=0,
                     max_value=1
-                ),
-                "GMV": st.column_config.NumberColumn(
-                    "GMV",
-                    format="₹%d"
                 )
             }
         )
         
-        # Export options
+        # Export
         st.markdown("---")
         col1, col2 = st.columns(2)
         
         with col1:
             csv = filtered_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download as CSV",
-                data=csv,
-                file_name="master_table.csv",
-                mime="text/csv"
+                "📥 Download CSV",
+                csv,
+                "master_table.csv",
+                "text/csv"
             )
         
         with col2:
-            # Excel export
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 filtered_df.to_excel(writer, index=False, sheet_name='Master_Styles')
             st.download_button(
-                label="📥 Download as Excel",
-                data=buffer,
-                file_name="master_table.xlsx",
-                mime="application/vnd.ms-excel"
+                "📥 Download Excel",
+                buffer,
+                "master_table.xlsx",
+                "application/vnd.ms-excel"
             )
-
-# ====================
-# WATCHLIST PAGE
-# ====================
-elif menu == "🚨 Watchlist":
-    st.markdown('<div class="main-header">🚨 Watchlist 30 Days</div>', unsafe_allow_html=True)
-    
-    # This will be implemented with WatchlistBuilder
-    st.info("Watchlist feature coming soon (Equivalent to BuildWatchlist30d VBA)")
-    
-    # Placeholder with sample data
-    if st.session_state.master_table is not None:
-        sample_watchlist = st.session_state.master_table.copy()
-        
-        # Add some mock tags
-        tags = ['NEW', 'STARTED', 'RISING', 'FALLING', 'FLAT']
-        sample_watchlist['Tag'] = np.random.choice(tags, len(sample_watchlist))
-        sample_watchlist['Orders30d Est'] = np.random.randint(1, 100, len(sample_watchlist))
-        sample_watchlist['Returns30d Qty'] = (sample_watchlist['Orders30d Est'] * 
-                                             np.random.uniform(0, 0.3, len(sample_watchlist))).astype(int)
-        
-        st.dataframe(sample_watchlist.head(20), use_container_width=True)
-
-# ====================
-# REPORTS PAGE
-# ====================
-elif menu == "📈 Reports":
-    st.markdown('<div class="main-header">📈 Reports & Analytics</div>', unsafe_allow_html=True)
-    
-    report_type = st.selectbox(
-        "Select Report Type",
-        ["Returns Insights", "Returns Type Split", "Zero-Sale Since Live", 
-         "Product Performance", "Size/SKU Analysis"]
-    )
-    
-    if report_type == "Returns Insights":
-        st.subheader("🔄 Returns Insights Report")
-        st.info("Equivalent to BuildReturnsInsights VBA function")
-        
-        # Date range selector
-        col1, col2 = st.columns(2)
-        with col1:
-            window_days = st.number_input("Window Days", 
-                                         value=st.session_state.params.get('return_insights_window', 60),
-                                         min_value=7, max_value=365)
-        
-        if st.button("Generate Returns Insights", type="primary"):
-            with st.spinner("Generating returns heatmap..."):
-                # This will call ReturnsAnalytics.build_returns_insights()
-                st.success("Report generated (VBA logic to be implemented)")
-    
-    elif report_type == "Zero-Sale Since Live":
-        st.subheader("📉 Zero-Sale Styles Report")
-        st.info("Equivalent to BuildZeroSaleSinceLive VBA function")
-        
-        zero_age = st.number_input("Zero-Sale Age (days)", 
-                                  value=st.session_state.params.get('zero_sale_age', 14),
-                                  min_value=1, max_value=365)
-        
-        if st.button("Find Zero-Sale Styles"):
-            with st.spinner("Analyzing zero-sale styles..."):
-                if st.session_state.master_table is not None:
-                    zero_sale = st.session_state.master_table[
-                        (st.session_state.master_table['Status'] == 'Zero-Sale') |
-                        (st.session_state.master_table['Orders'] == 0)
-                    ]
-                    
-                    if not zero_sale.empty:
-                        st.dataframe(zero_sale, use_container_width=True)
-                        st.info(f"Found {len(zero_sale)} zero-sale styles")
-                    else:
-                        st.success("🎉 No zero-sale styles found!")
-
-# ====================
-# FORECASTING PAGE
-# ====================
-elif menu == "🔮 Forecasting":
-    st.markdown('<div class="main-header">🔮 Inventory Forecasting</div>', unsafe_allow_html=True)
-    
-    # Forecast parameters (from your VBA params)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        lookback = st.number_input("Lookback Days", 
-                                  value=st.session_state.params.get('forecast_lookback', 30))
-    with col2:
-        event_days = st.number_input("Event Days", 
-                                    value=st.session_state.params.get('event_days', 10))
-    with col3:
-        traffic_mult = st.number_input("Traffic Multiplier", 
-                                      value=float(st.session_state.params.get('traffic_multiplier', 3)))
-    
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        return_rate = st.number_input("Return Rate", 
-                                     value=float(st.session_state.params.get('forecast_return_rate', 0.25)),
-                                     format="%.2f")
-    with col5:
-        leadtime = st.number_input("Lead Time (days)", 
-                                  value=st.session_state.params.get('leadtime_days', 7))
-    with col6:
-        service_level = st.number_input("Service Level", 
-                                       value=float(st.session_state.params.get('service_level', 0.9)),
-                                       format="%.2f")
-    
-    if st.button("🚀 Generate Inventory Forecast", type="primary", use_container_width=True):
-        with st.spinner("Calculating inventory requirements..."):
-            # This will call ForecastEngine.inventory_forecast()
-            st.info("Forecast engine to be implemented (VBA equivalent)")
-            
-            # Sample forecast
-            if st.session_state.master_table is not None:
-                sample_forecast = st.session_state.master_table.copy()
-                sample_forecast['Forecast_Qty'] = (
-                    sample_forecast['Orders'] / 30 * event_days * traffic_mult * (1 - return_rate)
-                ).round().astype(int)
-                
-                st.dataframe(
-                    sample_forecast[['Style ID', 'Orders', 'Forecast_Qty']].head(20),
-                    use_container_width=True
-                )
-
-# ====================
-# AD RECOMMENDATIONS
-# ====================
-elif menu == "🎯 Ad Recommendations":
-    st.markdown('<div class="main-header">🎯 Ad Recommendations</div>', unsafe_allow_html=True)
-    
-    st.info("Equivalent to BuildAdsReco3 VBA function")
-    
-    # Parameters
-    col1, col2 = st.columns(2)
-    with col1:
-        new_age = st.number_input("New Age Days", 
-                                 value=st.session_state.params.get('new_age_days', 60))
-    with col2:
-        high_return = st.number_input("High Return %", 
-                                     value=float(st.session_state.params.get('high_return_pct', 0.35)),
-                                     format="%.2f")
-    
-    if st.button("Generate Ad Recommendations", type="primary"):
-        with st.spinner("Analyzing styles for ad recommendations..."):
-            # This will call AdsRecommender.build_ads_reco()
-            
-            if st.session_state.master_table is not None:
-                # Sample logic
-                recommendations = st.session_state.master_table.copy()
-                
-                # Simple decision logic (like your VBA)
-                conditions = [
-                    (recommendations['Status'] == 'Zero-Sale'),
-                    (recommendations['Status'] == 'New') & (recommendations['Orders'] < 2),
-                    (recommendations['ReturnPct'] >= high_return),
-                    (recommendations['Orders'] >= 10)
-                ]
-                choices = ['PUSH (Zero-Sale)', 'PUSH (New Discovery)', 
-                          'STOP (High Returns)', 'SCALE']
-                
-                recommendations['Decision'] = np.select(conditions, choices, default='WATCH')
-                
-                st.dataframe(
-                    recommendations[['Style ID', 'Status', 'Orders', 'ReturnPct', 'Decision']],
-                    use_container_width=True
-                )
 
 # ====================
 # SETTINGS PAGE
 # ====================
-elif menu == "⚙️ Settings":
-    st.markdown('<div class="main-header">⚙️ Parameters & Settings</div>', unsafe_allow_html=True)
+elif menu == "Settings":
+    st.markdown('<div class="main-header">⚙️ Settings & Parameters</div>', unsafe_allow_html=True)
     
-    # Show current params
+    # Current params
     with st.expander("📋 Current Parameters"):
         st.json(st.session_state.params)
     
-    # Update parameters
+    # Update params
     st.markdown("### Update Parameters")
     
     with st.form("params_form"):
         col1, col2 = st.columns(2)
         
         with col1:
-            zero_age = st.number_input("Zero-Sale Age Days", 
-                                      value=st.session_state.params.get('zero_sale_age', 14))
+            zero_age = st.number_input("Zero-Sale Age (days)", 
+                                      value=st.session_state.params['zero_age'],
+                                      min_value=1, max_value=365)
             high_return = st.number_input("High Return %", 
-                                         value=float(st.session_state.params.get('high_return_pct', 0.35)),
-                                         format="%.2f")
-            watch_min = st.number_input("Watchlist Min Orders", 
-                                       value=st.session_state.params.get('watch_min_orders', 3))
+                                         value=float(st.session_state.params['high_return_pct']),
+                                         min_value=0.0, max_value=1.0, format="%.2f")
         
         with col2:
-            new_age = st.number_input("New Age Days", 
-                                     value=st.session_state.params.get('new_age_days', 60))
-            start_recent = st.number_input("Start Recent Min Orders", 
-                                          value=st.session_state.params.get('start_recent_min_orders', 2))
-            start_prev = st.number_input("Start Previous Max Orders", 
-                                        value=st.session_state.params.get('start_prev_max_orders', 0))
+            watch_min = st.number_input("Watchlist Min Orders", 
+                                       value=st.session_state.params['watch_min_orders'],
+                                       min_value=1, max_value=100)
         
         submitted = st.form_submit_button("💾 Save Parameters")
         
         if submitted:
-            # Update params
             st.session_state.params.update({
-                'zero_sale_age': zero_age,
+                'zero_age': zero_age,
                 'high_return_pct': high_return,
-                'watch_min_orders': watch_min,
-                'new_age_days': new_age,
-                'start_recent_min_orders': start_recent,
-                'start_prev_max_orders': start_prev
+                'watch_min_orders': watch_min
             })
             st.success("✅ Parameters saved!")
-    
-    # Brand filter settings
-    st.markdown("---")
-    st.markdown("### 🏷️ Brand Filter Settings")
-    
-    brand_mode = st.selectbox(
-        "Brand Filter Mode",
-        ["ALL", "ONE", "LIST"],
-        index=0
-    )
-    
-    if brand_mode == "ONE":
-        brand_name = st.text_input("Specific Brand Name", "")
-    elif brand_mode == "LIST":
-        brand_list = st.text_area("Brand List (comma-separated)", 
-                                 help="Enter brands separated by commas")
     
     # Data management
     st.markdown("---")
@@ -742,10 +634,8 @@ elif menu == "⚙️ Settings":
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: gray; padding: 20px;'>"
-    "📊 Project M Dashboard • VBA Excel Migration • Built with Streamlit"
-    "<br>"
-    "<small>Equivalent to your Excel VBA: SetupProjectM, RefreshData, BuildMasterTable, etc.</small>"
+    "<div style='text-align: center; color: gray;'>"
+    "Myntra Partner Dashboard • VBA Excel Migration • Built with Streamlit"
     "</div>",
     unsafe_allow_html=True
 )

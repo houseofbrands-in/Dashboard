@@ -50,6 +50,50 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Add this function near the top of app.py
+def normalize_style_id(style_value):
+    """Normalize style ID like VBA does: lowercase, trim, convert numbers"""
+    if pd.isna(style_value):
+        return ""
+    
+    # Convert to string
+    style_str = str(style_value)
+    
+    # Remove extra spaces
+    style_str = style_str.strip()
+    
+    # If it's a number, remove decimal points
+    try:
+        if float(style_str).is_integer():
+            style_str = str(int(float(style_str)))
+    except:
+        pass
+    
+    # Convert to lowercase like VBA's LOWER()
+    return style_str.lower()
+
+# Update the data processing section in "Data Upload" page
+if menu == "Data Upload":
+    # ... (keep existing code until file upload)
+    
+    if sales_file:
+        sales_df = pd.read_csv(sales_file)
+        
+        # Apply style ID normalization
+        st.info("Looking for Style column...")
+        
+        # Try to find style column
+        style_cols = [col for col in sales_df.columns 
+                     if any(keyword in col.lower() for keyword in 
+                           ['style', 'product', 'code', 'id', 'sku'])]
+        
+        if style_cols:
+            style_col = style_cols[0]
+            # Apply normalization
+            sales_df['StyleKey'] = sales_df[style_col].apply(normalize_style_id)
+            st.success(f"Found style column: '{style_col}' → Normalized to 'StyleKey'")
+        
+        st.session_state.sales_data = sales_df
 # Initialize session state
 if 'sales_data' not in st.session_state:
     st.session_state.sales_data = None

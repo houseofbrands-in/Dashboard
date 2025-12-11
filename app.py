@@ -17,6 +17,21 @@ from datetime import datetime, timedelta
 import io
 import base64
 from typing import Optional
+import sys
+import traceback
+
+try:
+    from utils.calculations import BusinessCalculations
+    print("✓ Successfully imported BusinessCalculations")
+except SyntaxError as e:
+    print(f"✗ SyntaxError: {e}")
+    print(f"File: {e.filename}, Line: {e.lineno}")
+    traceback.print_exc()
+    sys.exit(1)
+except ImportError as e:
+    print(f"✗ ImportError: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # Import our VBA processor
 from utils.data_processor import ProjectMProcessor

@@ -2,6 +2,9 @@
 Business Logic Calculations for Project M
 Replicating Excel VBA formulas and calculations
 """
+
+print("✓ calculations.py is being loaded")
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
